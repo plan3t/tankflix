@@ -74,9 +74,8 @@ def ensure_csrf(request: Request) -> str:
     return token
 
 
-def require_admin(request: Request) -> None:
-    if not request.session.get("admin_user"):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+def require_admin(request: Request) -> bool:
+    return bool(request.session.get("admin_user"))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -189,7 +188,8 @@ def admin_logout(request: Request):
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request, db: Session = Depends(get_db)):
-    require_admin(request)
+    if not require_admin(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
     cfg = db.get(AppConfig, 1)
     return templates.TemplateResponse(
         "admin.html",
@@ -215,7 +215,8 @@ def admin_save(
     notify_cheapest_change: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    require_admin(request)
+    if not require_admin(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
     if csrf_token != request.session.get("csrf_token"):
         raise HTTPException(status_code=400, detail="Invalid CSRF token")
 
