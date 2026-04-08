@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="panel">
+  <h2>Preisübersicht – {{ 'Benzin (E5)' if fuel == 'e5' else 'Diesel' }}</h2>
+  <p>
+    Ausgangspunkt: {{ config.origin_address if config.origin_address else (config.origin_lat ~ ', ' ~ config.origin_lng) }} |
+    Radius: {{ '%.1f'|format(config.radius_km) }} km
+  </p>
+  <p>Zuletzt aktualisiert: {{ last_update.strftime('%Y-%m-%d %H:%M:%S UTC') if last_update else 'Noch keine Daten vorhanden' }}</p>
+</section>
+
+<section class="panel">
+  {% if stations %}
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Marke</th>
+          <th>Adresse</th>
+          <th>Preis (€/L)</th>
+          <th>Entfernung (km)</th>
+          <th>Status</th>
+          <th>Aktualisiert</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for station in stations %}
+        <tr>
+          <td>{{ station.name }}</td>
+          <td>{{ station.brand or '-' }}</td>
+          <td>{{ station.street }} {{ station.place }}</td>
+          <td>{{ '%.3f'|format(station.price) }}</td>
+          <td>{{ '%.2f'|format(station.distance_km) }}</td>
+          <td>{{ 'Offen' if station.is_open else 'Geschlossen' }}</td>
+          <td>{{ station.fetched_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p>Keine Tankstellen gefunden. Prüfe API-Key, Standort und Radius.</p>
+  {% endif %}
+</section>
+{% endblock %}
