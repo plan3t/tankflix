@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block content %}
+<section class="panel">
+  <h2>Admin-Konfiguration</h2>
+  {% if saved %}<p class="ok">Konfiguration gespeichert.</p>{% endif %}
+  <form method="post" action="/admin">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+
+    <h3>Ausgangspunkt</h3>
+    <label>Adresse (optional)
+      <input type="text" name="origin_address" value="{{ config.origin_address }}" />
+    </label>
+    <div class="grid2">
+      <label>Latitude
+        <input type="number" step="0.000001" name="origin_lat" value="{{ config.origin_lat }}" required />
+      </label>
+      <label>Longitude
+        <input type="number" step="0.000001" name="origin_lng" value="{{ config.origin_lng }}" required />
+      </label>
+    </div>
+    <label>Suchradius (km)
+      <input type="number" step="0.1" min="1" name="radius_km" value="{{ config.radius_km }}" required />
+    </label>
+
+    <h3>Alarme</h3>
+    <div class="grid2">
+      <label>E5 Grenzwert (€/L)
+        <input type="number" step="0.001" name="threshold_e5" value="{{ config.threshold_e5 }}" required />
+      </label>
+      <label>Diesel Grenzwert (€/L)
+        <input type="number" step="0.001" name="threshold_diesel" value="{{ config.threshold_diesel }}" required />
+      </label>
+    </div>
+    <label>Starke Preisänderung (Cent)
+      <input type="number" step="0.1" name="strong_change_cents" value="{{ config.strong_change_cents }}" required />
+    </label>
+
+    <h3>Polling</h3>
+    <label>Polling Intervall (Sekunden, min. 300)
+      <input type="number" min="300" name="poll_interval_seconds" value="{{ config.poll_interval_seconds }}" required />
+    </label>
+
+    <h3>Filter</h3>
+    <label class="checkbox"><input type="checkbox" name="only_open" {% if config.only_open %}checked{% endif %}/> Nur offene Tankstellen berücksichtigen</label>
+
+    <h3>Microsoft Teams</h3>
+    <label class="checkbox"><input type="checkbox" name="teams_enabled" {% if config.teams_enabled %}checked{% endif %}/> Teams-Benachrichtigungen aktivieren</label>
+    <label>Webhook URL
+      <input type="url" name="teams_webhook_url" value="{{ config.teams_webhook_url }}" placeholder="https://..." />
+    </label>
+    <label class="checkbox"><input type="checkbox" name="notify_cheapest_change" {% if config.notify_cheapest_change %}checked{% endif %}/> Melden, wenn günstigste Tankstelle wechselt</label>
+
+    <button type="submit">Speichern</button>
+  </form>
+
+  <form method="post" action="/admin/logout" class="inline-top">
+    <button type="submit" class="secondary">Logout</button>
+  </form>
+  <p class="hint">Serverzeit: {{ now.strftime('%Y-%m-%d %H:%M:%S UTC') }}</p>
+</section>
+{% endblock %}

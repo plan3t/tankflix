@@ -1,0 +1,7 @@
+version: '3.9'
+services:
+  tankflix:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tankflix:local
