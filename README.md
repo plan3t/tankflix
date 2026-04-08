@@ -58,12 +58,12 @@ TankFlix ist eine schlanke FastAPI-Webanwendung zur Anzeige aktueller Kraftstoff
 2. Für die Distanzberechnung wird **Lat/Lng** verwendet. Ein reiner Adresswert wird als Label gespeichert, aber nicht automatisch geokodiert.
 3. Standardkraftstoff für Benzin ist **E5**. Die Struktur erlaubt spätere Erweiterung (z. B. E10).
 4. Polling-Intervall wird technisch auf mindestens **300 Sekunden (5 Minuten)** begrenzt.
-5. Passwort wird gehasht gespeichert (bcrypt via passlib); initial aus ENV beim ersten Start angelegt.
+5. Passwort wird gehasht gespeichert (scrypt, mit Legacy-Fallback für bestehende bcrypt-Hashes); initial aus ENV beim ersten Start angelegt.
 
 ## Voraussetzungen
 
 - Docker + Docker Compose
-- Tankerkönig API-Key
+- Tankerkönig API-Key (optional für UI-only Betrieb ohne Live-Preise)
 
 ## Setup
 
