@@ -14,11 +14,23 @@ class TankerKoenigClient:
 
     def __init__(self, timeout_seconds: int = 10):
         self.timeout_seconds = timeout_seconds
+        self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+
+    def _cache_key(self, lat: float, lng: float, radius_km: float, fuel_type: str) -> str:
+        return f"{fuel_type}:{lat:.5f}:{lng:.5f}:{radius_km:.2f}"
 
     def fetch_prices(self, lat: float, lng: float, radius_km: float, fuel_type: str) -> list[dict[str, Any]]:
         if not settings.tankerkoenig_api_key:
             logger.warning("Tankerkoenig API key is missing; skipping fetch")
             return []
+
+        key = self._cache_key(lat, lng, radius_km, fuel_type)
+        now = time.time()
+        min_interval = max(60, settings.tankerkoenig_min_fetch_interval_seconds)
+        cached = self._cache.get(key)
+        if cached and now - cached[0] < min_interval:
+            logger.info("Using cached Tankerkoenig data for %s (age %.1fs)", fuel_type, now - cached[0])
+            return cached[1]
 
         params = {
             "lat": lat,
@@ -37,13 +49,15 @@ class TankerKoenigClient:
                 data = response.json()
                 if not data.get("ok"):
                     logger.error("API responded with ok=false for %s: %s", fuel_type, data)
-                    return []
-                return data.get("stations", [])
+                    return cached[1] if cached else []
+                stations = data.get("stations", [])
+                self._cache[key] = (now, stations)
+                return stations
             except Exception as exc:  # noqa: BLE001
                 if attempt == retries:
                     logger.exception("Failed to fetch tankerkoenig data after retries: %s", exc)
-                    return []
+                    return cached[1] if cached else []
                 backoff = 2 ** (attempt - 1)
                 logger.warning("Fetch failed (attempt %s/%s), retrying in %ss", attempt, retries, backoff)
                 time.sleep(backoff)
-        return []
+        return cached[1] if cached else []

@@ -12,6 +12,7 @@ class Settings:
     secret_key: str = os.getenv("SECRET_KEY", "change-me-please")
     poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "300"))
     request_timeout_seconds: int = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
+    tankerkoenig_min_fetch_interval_seconds: int = int(os.getenv("TANKERKOENIG_MIN_FETCH_INTERVAL_SECONDS", "300"))
 
     default_origin_address: str = os.getenv("DEFAULT_ORIGIN_ADDRESS", "An d. Wesebreede 2, 33699 Bielefeld")
     default_origin_lat: float = float(os.getenv("DEFAULT_ORIGIN_LAT", "51.9887894"))

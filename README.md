@@ -35,6 +35,7 @@ TankFlix ist eine schlanke FastAPI-Webanwendung zur Anzeige aktueller Kraftstoff
   - offen/geschlossen
   - letzte Aktualisierung
 - **Sortierung:** Preis aufsteigend, danach Entfernung aufsteigend.
+- **Interaktive UX-Erweiterungen:** Kartenansicht (Leaflet/OSM), Filter (offen/Marke/Entfernung/Favoriten), Trend-Sparklines, visuelle Alert-Badges, Dark Mode, mobile Optimierung und verbesserte Empty/Error-Zustände.
 - **Admin-Bereich** (Login-geschützt):
   - Ausgangspunkt (Adresse optional + Lat/Lng)
   - Suchradius
@@ -83,11 +84,23 @@ SECRET_KEY=zufaelliger_langer_wert
 
 ## Start
 
+### Option A: Vorgebautes Image (empfohlen für Server)
+
+1. `.env` erstellen und konfigurieren.
+2. Start:
+
 ```bash
-docker compose up --build
+docker compose pull
+docker compose up -d
 ```
 
-Danach ist die App erreichbar unter: `http://localhost:8000`
+### Option B: Lokal selbst bauen
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+```
+
+Danach ist die App erreichbar unter: `http://localhost:8111`
 
 ## Nutzung
 
@@ -105,6 +118,7 @@ Danach ist die App erreichbar unter: `http://localhost:8000`
 - `SECRET_KEY` – Session/CSRF-Secret
 - `POLL_INTERVAL_SECONDS` – Polling in Sekunden (min. 300)
 - `REQUEST_TIMEOUT_SECONDS` – HTTP Timeout
+- `TANKERKOENIG_MIN_FETCH_INTERVAL_SECONDS` – Mindestabstand für externe API-Calls (Cache/Rate-Limit-Schicht)
 
 - `DEFAULT_ORIGIN_ADDRESS` – Standard-Ausgangspunkt (Adresslabel)
 - `DEFAULT_ORIGIN_LAT` – Standard-Latitude
@@ -114,6 +128,7 @@ Danach ist die App erreichbar unter: `http://localhost:8000`
 
 - Es wird die Umkreissuche mit Parametern `lat`, `lng`, `rad`, `type` und Sortierung nach `price` genutzt.
 - API-Aufrufe erfolgen mit Retry/Backoff.
+- Zusätzliche Rate-Limit/Cache-Schicht: bei identischen Parametern innerhalb des konfigurierten Mindestintervalls werden gecachte Ergebnisse genutzt statt neuer externer Calls.
 - Bei Fehlern bleiben bisherige Daten erhalten, Logging dokumentiert Probleme.
 
 ## Hinweise zur Teams-Webhook-Einrichtung
@@ -146,9 +161,29 @@ Es gibt eine manuell startbare Pipeline unter `.github/workflows/build-and-relea
 - Baut Docker Image und pusht nach GHCR mit zwei Tags:
   - `<version>`
   - `latest`
+- Erstellt zusätzlich ein Git-Tag `v<version>` und eine GitHub Release
 
 Beispiel-Imagepfad:
 - `ghcr.io/<owner>/<repo>:1.2.0`
 - `ghcr.io/<owner>/<repo>:latest`
 
 Hinweis: Das Repo benötigt die üblichen Rechte auf `packages: write` (im Workflow gesetzt).
+
+
+## Troubleshooting
+
+**Fehler:** `failed to read dockerfile: open Dockerfile: no such file or directory`
+
+Das bedeutet fast immer, dass im aktuellen Projektordner keine `Dockerfile` vorhanden ist oder du aus dem falschen Verzeichnis startest.
+
+Prüfe auf dem Host:
+
+```bash
+pwd
+ls -la
+cat docker-compose.yml
+```
+
+Du solltest `docker-compose.yml` **und** `Dockerfile` im selben Projektordner sehen, wenn du lokal bauen willst (Option B).
+
+Wenn du nur das veröffentlichte Image starten willst, nutze Option A (`docker compose pull && docker compose up -d`) – das Image ist auf `ghcr.io/plan3t/tankflix:latest` festgelegt.

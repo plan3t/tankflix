@@ -1,7 +1,8 @@
+import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -14,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.auth import hash_password, verify_password
 from app.config import settings
 from app.database import Base, engine, get_db
-from app.models import AdminUser, AppConfig, StationPrice
+from app.models import AdminUser, AppConfig, PriceHistory, StationPrice
 from app.services.poller import PricePoller
 
 logging.basicConfig(
@@ -54,8 +55,6 @@ def seed_defaults(db: Session) -> None:
                 poll_interval_seconds=max(300, settings.poll_interval_seconds),
             )
         )
-
-
     elif not config.origin_address and config.origin_lat == 52.52 and config.origin_lng == 13.405:
         config.origin_address = settings.default_origin_address
         config.origin_lat = settings.default_origin_lat
@@ -87,6 +86,55 @@ def home(request: Request, fuel: str = "e5", db: Session = Depends(get_db)):
     rows = db.scalars(select(StationPrice).where(StationPrice.fuel_type == fuel)).all()
     rows.sort(key=lambda row: (row.price, row.distance_km))
     last_update = rows[0].fetched_at if rows else None
+
+    since_7d = datetime.utcnow() - timedelta(days=7)
+    history_rows = db.scalars(
+        select(PriceHistory)
+        .where(PriceHistory.fuel_type == fuel, PriceHistory.fetched_at >= since_7d)
+        .order_by(PriceHistory.fetched_at.asc())
+    ).all()
+
+    history_by_station: dict[str, list[float]] = {}
+    for item in history_rows:
+        history_by_station.setdefault(item.station_id, []).append(round(item.price, 3))
+
+    station_meta: dict[str, dict[str, bool | float]] = {}
+    for row in rows:
+        prev = db.scalar(
+            select(PriceHistory)
+            .where(
+                PriceHistory.station_id == row.station_id,
+                PriceHistory.fuel_type == fuel,
+                PriceHistory.fetched_at < row.fetched_at,
+            )
+            .order_by(PriceHistory.fetched_at.desc())
+        )
+        delta_cents = ((row.price - prev.price) * 100) if prev else 0
+        station_meta[row.station_id] = {
+            "below_threshold": bool(row.price <= (cfg.threshold_e5 if fuel == "e5" else cfg.threshold_diesel)),
+            "strong_drop": bool(delta_cents <= -cfg.strong_change_cents),
+            "delta_cents": round(delta_cents, 1),
+        }
+
+    stations_payload = [
+        {
+            "id": row.station_id,
+            "name": row.name,
+            "brand": row.brand or "",
+            "street": row.street or "",
+            "place": row.place or "",
+            "lat": row.lat,
+            "lng": row.lng,
+            "price": row.price,
+            "distance_km": row.distance_km,
+            "is_open": row.is_open,
+            "meta": station_meta[row.station_id],
+        }
+        for row in rows
+    ]
+
+    brands = sorted({row.brand for row in rows if row.brand})
+
     return templates.TemplateResponse(
         "index.html",
         {
@@ -95,6 +143,10 @@ def home(request: Request, fuel: str = "e5", db: Session = Depends(get_db)):
             "stations": rows,
             "last_update": last_update,
             "config": cfg,
+            "brands": brands,
+            "station_meta": station_meta,
+            "history_by_station": history_by_station,
+            "stations_json": json.dumps(stations_payload),
         },
     )
 

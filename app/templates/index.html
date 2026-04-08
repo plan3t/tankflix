@@ -1,7 +1,13 @@
 {% extends 'base.html' %}
 {% block content %}
-<section class="panel">
-  <h2>Preisübersicht – {{ 'Benzin (E5)' if fuel == 'e5' else 'Diesel' }}</h2>
+<section class="panel sticky-toolbar">
+  <div class="toolbar-row">
+    <h2>Preisübersicht – {{ 'Benzin (E5)' if fuel == 'e5' else 'Diesel' }}</h2>
+    <div class="toolbar-actions">
+      <button id="theme-toggle" type="button" class="secondary">🌙 Dark Mode</button>
+      <a class="btn-link" href="/?fuel={{ fuel }}">🔄 Neu laden</a>
+    </div>
+  </div>
   <p>
     Ausgangspunkt: {{ config.origin_address if config.origin_address else (config.origin_lat ~ ', ' ~ config.origin_lng) }} |
     Radius: {{ '%.1f'|format(config.radius_km) }} km
@@ -10,15 +16,42 @@
 </section>
 
 <section class="panel">
+  <h3>Filter</h3>
+  <div class="filter-grid">
+    <label class="checkbox"><input id="open-only" type="checkbox"/> Nur offene</label>
+    <label>Marke
+      <select id="brand-filter">
+        <option value="">Alle Marken</option>
+        {% for brand in brands %}
+        <option value="{{ brand }}">{{ brand }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Max. Entfernung: <span id="distance-value">{{ '%.1f'|format(config.radius_km) }}</span> km
+      <input id="distance-filter" type="range" min="1" max="{{ config.radius_km|int if config.radius_km > 1 else 1 }}" step="0.5" value="{{ config.radius_km }}" />
+    </label>
+    <label class="checkbox"><input id="favorites-only" type="checkbox"/> Nur Favoriten</label>
+  </div>
+</section>
+
+<section class="panel">
+  <h3>Kartenansicht</h3>
+  <div id="station-map"></div>
+</section>
+
+<section class="panel">
   {% if stations %}
   <div class="table-wrapper">
-    <table>
+    <table id="stations-table">
       <thead>
         <tr>
+          <th>Fav</th>
           <th>Name</th>
           <th>Marke</th>
           <th>Adresse</th>
           <th>Preis (€/L)</th>
+          <th>Trend</th>
+          <th>Badges</th>
           <th>Entfernung (km)</th>
           <th>Status</th>
           <th>Aktualisiert</th>
@@ -26,11 +59,25 @@
       </thead>
       <tbody>
         {% for station in stations %}
-        <tr>
+        {% set meta = station_meta.get(station.station_id, {}) %}
+        <tr
+          data-id="{{ station.station_id }}"
+          data-brand="{{ station.brand }}"
+          data-open="{{ '1' if station.is_open else '0' }}"
+          data-distance="{{ station.distance_km }}"
+        >
+          <td><button class="fav-btn" type="button" data-id="{{ station.station_id }}">☆</button></td>
           <td>{{ station.name }}</td>
           <td>{{ station.brand or '-' }}</td>
           <td>{{ station.street }} {{ station.place }}</td>
           <td>{{ '%.3f'|format(station.price) }}</td>
+          <td>
+            <canvas class="sparkline" width="120" height="28" data-points='{{ history_by_station.get(station.station_id, [])|tojson }}'></canvas>
+          </td>
+          <td>
+            {% if meta.get('below_threshold') %}<span class="badge success">Unter Grenzwert</span>{% endif %}
+            {% if meta.get('strong_drop') %}<span class="badge info">Starker Drop</span>{% endif %}
+          </td>
           <td>{{ '%.2f'|format(station.distance_km) }}</td>
           <td>{{ 'Offen' if station.is_open else 'Geschlossen' }}</td>
           <td>{{ station.fetched_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
@@ -40,7 +87,128 @@
     </table>
   </div>
   {% else %}
-  <p>Keine Tankstellen gefunden. Prüfe API-Key, Standort und Radius.</p>
+  <div class="empty-state">
+    <h3>Keine Tankstellen gefunden</h3>
+    <p>Prüfe API-Key, Standort, Radius und ob die API aktuell erreichbar ist.</p>
+    <a class="btn-link" href="/?fuel={{ fuel }}">Erneut versuchen</a>
+  </div>
   {% endif %}
 </section>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+  const stations = {{ stations_json | safe }};
+  const map = L.map('station-map').setView([{{ config.origin_lat }}, {{ config.origin_lng }}], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+  L.marker([{{ config.origin_lat }}, {{ config.origin_lng }}]).addTo(map).bindPopup('Ausgangspunkt');
+
+  const markerGroup = L.layerGroup().addTo(map);
+  function markerColor(price) {
+    if (price <= 1.60) return '#16a34a';
+    if (price <= 1.75) return '#f59e0b';
+    return '#dc2626';
+  }
+  function renderMarkers(filteredStations) {
+    markerGroup.clearLayers();
+    filteredStations.forEach(s => {
+      const marker = L.circleMarker([s.lat, s.lng], { radius: 7, color: markerColor(s.price) }).addTo(markerGroup);
+      marker.bindPopup(`<b>${s.name}</b><br>${s.price.toFixed(3)} €/L<br>${s.distance_km.toFixed(2)} km`);
+    });
+  }
+
+  const rows = Array.from(document.querySelectorAll('#stations-table tbody tr'));
+  const openOnly = document.getElementById('open-only');
+  const brandFilter = document.getElementById('brand-filter');
+  const distanceFilter = document.getElementById('distance-filter');
+  const distanceValue = document.getElementById('distance-value');
+  const favoritesOnly = document.getElementById('favorites-only');
+  const favStorageKey = 'tankflix-favorites';
+  const favorites = new Set(JSON.parse(localStorage.getItem(favStorageKey) || '[]'));
+
+  function updateFavButtons() {
+    document.querySelectorAll('.fav-btn').forEach(btn => {
+      const id = btn.dataset.id;
+      btn.textContent = favorites.has(id) ? '★' : '☆';
+      btn.classList.toggle('active', favorites.has(id));
+    });
+  }
+
+  function applyFilters() {
+    const maxDistance = parseFloat(distanceFilter.value || '999');
+    distanceValue.textContent = maxDistance.toFixed(1);
+    const filteredStations = [];
+
+    rows.forEach(row => {
+      const id = row.dataset.id;
+      const isOpen = row.dataset.open === '1';
+      const brand = row.dataset.brand || '';
+      const distance = parseFloat(row.dataset.distance || '999');
+      const isFavorite = favorites.has(id);
+
+      const visible = (!openOnly.checked || isOpen)
+        && (!brandFilter.value || brand === brandFilter.value)
+        && distance <= maxDistance
+        && (!favoritesOnly.checked || isFavorite);
+
+      row.style.display = visible ? '' : 'none';
+      if (visible) {
+        const st = stations.find(s => s.id === id);
+        if (st) filteredStations.push(st);
+      }
+    });
+
+    renderMarkers(filteredStations);
+  }
+
+  document.querySelectorAll('.fav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.id;
+      if (favorites.has(id)) favorites.delete(id); else favorites.add(id);
+      localStorage.setItem(favStorageKey, JSON.stringify(Array.from(favorites)));
+      updateFavButtons();
+      applyFilters();
+    });
+  });
+
+  [openOnly, brandFilter, distanceFilter, favoritesOnly].forEach(el => el?.addEventListener('input', applyFilters));
+  updateFavButtons();
+  renderMarkers(stations);
+  applyFilters();
+
+  document.querySelectorAll('.sparkline').forEach((canvas) => {
+    const ctx = canvas.getContext('2d');
+    const points = JSON.parse(canvas.dataset.points || '[]');
+    if (points.length < 2) return;
+    const min = Math.min(...points);
+    const max = Math.max(...points);
+    const height = canvas.height;
+    const width = canvas.width;
+    ctx.strokeStyle = '#2563eb';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    points.forEach((p, i) => {
+      const x = (i / (points.length - 1)) * width;
+      const y = max === min ? height / 2 : ((max - p) / (max - min)) * (height - 4) + 2;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+
+  const themeToggle = document.getElementById('theme-toggle');
+  const themeKey = 'tankflix-theme';
+  const setTheme = (theme) => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(themeKey, theme);
+    themeToggle.textContent = theme === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode';
+  };
+  setTheme(localStorage.getItem(themeKey) || 'light');
+  themeToggle.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    setTheme(current === 'light' ? 'dark' : 'light');
+  });
+</script>
 {% endblock %}
