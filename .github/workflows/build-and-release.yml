@@ -10,6 +10,14 @@ on:
       version:
         description: "Version tag for image (e.g. 1.2.0)"
         required: true
+  push:
+    tags:
+      - 'v*'
+
+# Serialize publication so different releases cannot race to update latest.
+concurrency:
+  group: tankflix-release
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
@@ -22,10 +30,37 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.target_ref }}
+          ref: ${{ github.event.inputs.target_ref || github.ref }}
 
-      - name: Normalize image name
+      - name: Resolve release metadata
+        id: release
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        shell: bash
         run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$INPUT_VERSION"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release version"
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
+              echo "::error::Release tag already exists; choose a new version"
+              exit 1
+            else
+              result=$?
+              if [[ "$result" != "2" ]]; then
+                exit "$result"
+              fi
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Set up QEMU
@@ -47,20 +82,27 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ github.event.inputs.version }}
+            ${{ env.IMAGE_NAME }}:${{ steps.release.outputs.version }}
             ${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.release.outputs.commit }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
 
       - name: Create Git tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ github.event.inputs.version }}"
-          git push origin "v${{ github.event.inputs.version }}"
+          git tag "v${RELEASE_VERSION}"
+          git push origin "v${RELEASE_VERSION}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          target_commitish: ${{ github.event.inputs.target_ref }}
-          name: v${{ github.event.inputs.version }}
+          tag_name: v${{ steps.release.outputs.version }}
+          target_commitish: ${{ steps.release.outputs.commit }}
+          name: v${{ steps.release.outputs.version }}
           generate_release_notes: true

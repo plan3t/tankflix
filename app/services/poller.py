@@ -1,12 +1,13 @@
 import asyncio
 import logging
+import math
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import AppConfig, PriceHistory, StationPrice
+from app.models import AppConfig, FetchStatus, PriceHistory, StationPrice
 from app.services.alerts import process_alerts
 from app.services.distance import haversine_distance_km
 from app.services.tankerkoenig import TankerKoenigClient
@@ -39,7 +40,8 @@ class PricePoller:
     async def _run_loop(self) -> None:
         while self._running:
             try:
-                self.poll_once()
+                # Requests/retries are synchronous; keep the web event loop responsive.
+                await asyncio.to_thread(self.poll_once)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Polling failed: %s", exc)
 
@@ -63,15 +65,28 @@ class PricePoller:
 
             for fuel_type in ["e5", "diesel"]:
                 stations = self.client.fetch_prices(cfg.origin_lat, cfg.origin_lng, cfg.radius_km, fuel_type)
-                if not stations:
+                outcome = self.client.outcomes[fuel_type]
+                status = db.get(FetchStatus, fuel_type)
+                if status is None:
+                    status = FetchStatus(fuel_type=fuel_type)
+                    db.add(status)
+                status.last_attempt_at = datetime.utcnow()
+                status.state = outcome.state
+                if outcome.state != "ok":
+                    # Keep the last good snapshot, including its original timestamp.
+                    continue
+
+                status.last_success_at = outcome.fetched_at
+                latest = db.scalar(select(func.max(StationPrice.fetched_at)).where(StationPrice.fuel_type == fuel_type))
+                if outcome.cached and latest and latest >= outcome.fetched_at:
                     continue
 
                 db.execute(delete(StationPrice).where(StationPrice.fuel_type == fuel_type))
-                now = datetime.utcnow()
+                now = outcome.fetched_at
                 items: list[StationPrice] = []
                 for raw in stations:
                     price = raw.get("price")
-                    if price is None:
+                    if not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
                         continue
                     is_open = bool(raw.get("isOpen", False))
                     if cfg.only_open and not is_open:
@@ -106,6 +121,8 @@ class PricePoller:
                 items.sort(key=lambda i: (i.price, i.distance_km))
                 for it in items:
                     db.add(it)
+
+                status.state = "ok" if items else "empty"
 
                 process_alerts(db, cfg, fuel_type, items)
 

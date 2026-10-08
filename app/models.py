@@ -66,6 +66,17 @@ class PriceHistory(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class FetchStatus(Base):
+    """Per-fuel fetch health; additive table for existing SQLite installations."""
+
+    __tablename__ = "fetch_status"
+
+    fuel_type: Mapped[str] = mapped_column(String(20), primary_key=True)
+    state: Mapped[str] = mapped_column(String(20), default="pending")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class AlertLog(Base):
     __tablename__ = "alert_log"
 

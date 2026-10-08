@@ -1,8 +1,8 @@
-import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -16,6 +16,7 @@ from app.auth import hash_password, verify_password
 from app.config import settings
 from app.database import Base, engine, get_db
 from app.models import AdminUser, AppConfig, PriceHistory, StationPrice
+from app.services.overview import overview_data, utc_iso
 from app.services.poller import PricePoller
 
 logging.basicConfig(
@@ -82,72 +83,33 @@ def require_admin(request: Request) -> bool:
 def home(request: Request, fuel: str = "e5", db: Session = Depends(get_db)):
     fuel = fuel if fuel in {"e5", "diesel"} else "e5"
     cfg = db.get(AppConfig, 1)
-    rows = db.scalars(select(StationPrice).where(StationPrice.fuel_type == fuel)).all()
-    rows.sort(key=lambda row: (row.price, row.distance_km))
-    last_update = rows[0].fetched_at if rows else None
-
-    since_7d = datetime.utcnow() - timedelta(days=7)
-    history_rows = db.scalars(
-        select(PriceHistory)
-        .where(PriceHistory.fuel_type == fuel, PriceHistory.fetched_at >= since_7d)
-        .order_by(PriceHistory.fetched_at.asc())
-    ).all()
-
-    history_by_station: dict[str, list[float]] = {}
-    for item in history_rows:
-        history_by_station.setdefault(item.station_id, []).append(round(item.price, 3))
-
-    station_meta: dict[str, dict[str, bool | float]] = {}
-    for row in rows:
-        prev = db.scalar(
-            select(PriceHistory)
-            .where(
-                PriceHistory.station_id == row.station_id,
-                PriceHistory.fuel_type == fuel,
-                PriceHistory.fetched_at < row.fetched_at,
-            )
-            .order_by(PriceHistory.fetched_at.desc())
-        )
-        delta_cents = ((row.price - prev.price) * 100) if prev else 0
-        station_meta[row.station_id] = {
-            "below_threshold": bool(row.price <= (cfg.threshold_e5 if fuel == "e5" else cfg.threshold_diesel)),
-            "strong_drop": bool(delta_cents <= -cfg.strong_change_cents),
-            "delta_cents": round(delta_cents, 1),
-        }
-
-    stations_payload = [
-        {
-            "id": row.station_id,
-            "name": row.name,
-            "brand": row.brand or "",
-            "street": row.street or "",
-            "place": row.place or "",
-            "lat": row.lat,
-            "lng": row.lng,
-            "price": row.price,
-            "distance_km": row.distance_km,
-            "is_open": row.is_open,
-            "meta": station_meta[row.station_id],
-        }
-        for row in rows
-    ]
-
-    brands = sorted({row.brand for row in rows if row.brand})
-
     return templates.TemplateResponse(
         "index.html",
-        {
-            "request": request,
-            "fuel": fuel,
-            "stations": rows,
-            "last_update": last_update,
-            "config": cfg,
-            "brands": brands,
-            "station_meta": station_meta,
-            "history_by_station": history_by_station,
-            "stations_json": json.dumps(stations_payload),
-        },
+        {"request": request, "fuel": fuel, "config": cfg, **overview_data(db, cfg, fuel)},
     )
+
+
+@app.get("/api/stations/{station_id}/history")
+def station_history(
+    station_id: str,
+    fuel: Literal["e5", "diesel"] = "e5",
+    days: int = 7,
+    db: Session = Depends(get_db),
+):
+    if days not in {1, 7, 30}:
+        raise HTTPException(status_code=422, detail="Zeitraum muss 1, 7 oder 30 Tage sein")
+    station = db.scalar(select(StationPrice).where(
+        StationPrice.station_id == station_id, StationPrice.fuel_type == fuel,
+    ))
+    if station is None:
+        raise HTTPException(status_code=404, detail="Tankstelle nicht gefunden")
+    since = datetime.utcnow() - timedelta(days=days)
+    points = db.scalars(select(PriceHistory).where(
+        PriceHistory.station_id == station_id, PriceHistory.fuel_type == fuel,
+        PriceHistory.fetched_at >= since,
+    ).order_by(PriceHistory.fetched_at, PriceHistory.id)).all()
+    return {"station_id": station_id, "fuel": fuel, "days": days,
+            "points": [{"at": utc_iso(item.fetched_at), "price": item.price} for item in points]}
 
 
 @app.get("/admin/login", response_class=HTMLResponse)
